@@ -105,6 +105,21 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .tapread{display:grid;gap:6px;min-width:0}
 .tapread .val{font-size:34px;color:var(--accent);margin:0}
 
+.hist{display:grid;gap:8px}
+.histhead{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.hist h2{font-size:14px;margin:0;font-weight:600}
+.hist .note{margin:0}
+.htable{width:100%;border-collapse:collapse;font-size:13.5px}
+.htable th{text-align:left;font-weight:500;font-size:12px;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
+.htable td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.htable tr:last-child td{border-bottom:0}
+.htable .num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.htable .bpmv{font-size:17px;font-weight:600}
+.htable .nm{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.htable tr.cur td{background:var(--accent-soft)}
+.htable .x{padding:2px 8px;font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+@media (max-width:640px){.htable .hide-s{display:none}.htable .nm{max-width:110px}}
 .info{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
 .info h2{font-size:15px;margin:0 0 6px}
 .info li{font-size:13.5px;color:var(--muted)}
@@ -219,6 +234,15 @@ input[type=range]{width:100%;accent-color:var(--accent)}
         <div><button id="tapReset" type="button">重新計數</button></div>
       </div>
     </div>
+  </section>
+
+  <section class="panel hist" aria-label="分析紀錄">
+    <div class="histhead">
+      <h2>最近的分析紀錄</h2>
+      <button id="histClear" type="button" hidden>清除全部</button>
+    </div>
+    <p class="note">只存在這台裝置的瀏覽器裡，最多保留 30 筆。調整分析設定時，會更新該筆錄音的數字。</p>
+    <div id="histBody"></div>
   </section>
 
   <section class="info panel">
@@ -440,7 +464,49 @@ async function decode(buf) {
   const C = window.OfflineAudioContext || window.webkitOfflineAudioContext, ctx = new C(1, 1, 44100);
   return await new Promise((res, rej) => { const p = ctx.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
 }
-async function loadBuffer(buf, name) {
+/* ---------- history (localStorage, per device) ---------- */
+const HKEY = 'catBreath.history.v1', HMAX = 30;
+const H = { list: [], cur: null, clearArmed: 0 };
+function hLoad() { try { const v = JSON.parse(localStorage.getItem(HKEY) || '[]'); H.list = Array.isArray(v) ? v : []; } catch (e) { H.list = []; } }
+function hSave() { try { localStorage.setItem(HKEY, JSON.stringify(H.list)); } catch (e) {} }
+function hRecord(r) {
+  if (!H.cur || !isFinite(r.bpm)) return;
+  const o = opts(), e = { id: H.cur.id, t: H.cur.t, name: H.cur.name, bpm: +r.bpm.toFixed(1), ac: isFinite(r.acBpm) ? +r.acBpm.toFixed(1) : null,
+    n: r.intervals.length, usable: Math.round(r.usable), dur: Math.round(r.dur), cv: isFinite(r.cv) ? Math.round(r.cv * 100) : null, paired: o.paired };
+  const i = H.list.findIndex(x => x.id === e.id);
+  if (i >= 0) H.list[i] = e; else H.list.unshift(e);
+  H.list.sort((a, b) => b.t - a.t); H.list = H.list.slice(0, HMAX);
+  hSave(); hRender();
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+function fmtDate(t) { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`; }
+function hRender() {
+  const b = $('histBody');
+  $('histClear').hidden = !H.list.length;
+  if (!H.list.length) { b.innerHTML = '<p class="note">還沒有紀錄。錄音或上傳一段錄音後，結果會自動記在這裡（範例錄音不會記錄）。</p>'; return; }
+  const col = v => v < 30 ? 'var(--ok)' : v <= 40 ? 'var(--warn)' : 'var(--bad)';
+  b.innerHTML = '<table class="htable"><thead><tr><th>時間</th><th>呼吸頻率</th><th class="hide-s">節奏法</th><th class="hide-s">有效間隔</th><th>錄音</th><th></th></tr></thead><tbody>' +
+    H.list.map(e => `<tr${H.cur && e.id === H.cur.id ? ' class="cur"' : ''}>
+      <td class="num">${fmtDate(e.t)}</td>
+      <td class="num"><i class="dot" style="background:${col(e.bpm)}"></i><span class="bpmv">${e.bpm.toFixed(1)}</span> 次/分</td>
+      <td class="num hide-s">${e.ac != null ? e.ac.toFixed(1) : '—'}</td>
+      <td class="num hide-s">${e.n} 個 · ${fmtT(e.usable)}</td>
+      <td class="nm" title="${esc(e.name)}">${esc(e.name)}</td>
+      <td><button class="x" type="button" data-del="${esc(e.id)}" aria-label="刪除這筆">刪除</button></td></tr>`).join('') + '</tbody></table>';
+}
+$('histBody').addEventListener('click', e => {
+  const id = e.target.dataset && e.target.dataset.del; if (!id) return;
+  H.list = H.list.filter(x => x.id !== id); hSave(); hRender();
+});
+$('histClear').addEventListener('click', () => {
+  if (Date.now() - H.clearArmed < 3000) { H.list = []; hSave(); hRender(); H.clearArmed = 0; $('histClear').textContent = '清除全部'; return; }
+  H.clearArmed = Date.now(); $('histClear').textContent = '再按一次確認清除';
+  setTimeout(() => { if (Date.now() - H.clearArmed >= 3000) $('histClear').textContent = '清除全部'; }, 3100);
+});
+hLoad(); hRender();
+
+async function loadBuffer(buf, name, rec) {
+  H.cur = rec ? { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: rec.t || Date.now(), name } : null;
   setStatus('解碼中…'); $('fname').textContent = name;
   let ab;
   try { ab = await decode(buf.slice(0)); }
@@ -467,6 +533,7 @@ function run() {
   if (S.brKey !== key) { S.br = Core.band(S.st, o.lo, hi); S.brKey = key; }
   S.res = Core.analyze(S.st, S.br, S.meow, o);
   render();
+  hRecord(S.res);
 }
 
 function render() {
@@ -619,11 +686,11 @@ $('tapReset').addEventListener('click', () => { T.taps = []; clearInterval(T.tim
 ['sens', 'lo', 'hi', 'minInt'].forEach(id => $(id).addEventListener('input', () => { setOuts(); clearTimeout(S.t); S.t = setTimeout(run, 60); }));
 ['paired', 'excl'].forEach(id => $(id).addEventListener('change', run));
 $('reset').addEventListener('click', () => { for (const k in DEF) { if (typeof DEF[k] === 'boolean') $(k).checked = DEF[k]; else $(k).value = DEF[k]; } setOuts(); run(); });
-$('fileInput').addEventListener('change', async e => { const f = e.target.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name); });
+$('fileInput').addEventListener('change', async e => { const f = e.target.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name, { t: f.lastModified }); });
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); if (t === 'drop' || e.target === drop) drop.classList.remove('over'); }));
-document.addEventListener('drop', async e => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name); });
+document.addEventListener('drop', async e => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name, { t: f.lastModified }); });
 $('play').addEventListener('click', () => {
   const a = S.audio; if (!a) return;
   if (a.paused) a.play().then(() => { $('play').textContent = '❚❚ 暫停'; tick(); }).catch(() => setStatus('瀏覽器拒絕播放這個檔案。', true));
@@ -657,7 +724,7 @@ async function recStart() {
     R.mr = null; clearInterval(R.timer); $('rec').classList.remove('on'); recLabel();
     const blob = new Blob(R.chunks, { type: mime }), ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
     const d = new Date(), stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
-    loadBuffer(await blob.arrayBuffer(), `錄音-${stamp}.${ext}`);
+    loadBuffer(await blob.arrayBuffer(), `錄音-${stamp}.${ext}`, { t: d.getTime() });
   };
   R.mr.start(1000); R.t0 = performance.now();
   $('rec').classList.add('on'); recLabel(); R.timer = setInterval(recLabel, 500);

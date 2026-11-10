@@ -1,5 +1,5 @@
 // Bump VERSION when shipping changes to the app shell.
-const VERSION = 'v1';
+const VERSION = 'v2';
 const SHELL = `shell-${VERSION}`, RUNTIME = 'runtime';
 const ASSETS = ['./', 'index.html', 'manifest.webmanifest', 'sample.mp4', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/icon.svg'];
 
