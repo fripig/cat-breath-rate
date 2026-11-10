@@ -1,0 +1,17 @@
+{
+  "name": "貓咪呼吸頻率分析器",
+  "short_name": "貓呼吸",
+  "description": "錄音或上傳貓咪睡覺時的錄音，自動推算每分鐘呼吸次數。",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EDF1F3",
+  "theme_color": "#1D6E8C",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -11,6 +11,13 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>呼吸頻率分析器</title>
 <meta name="description" content="直接錄音或上傳貓咪休息、睡覺時的錄音，自動排除喵叫聲，從鼻息的氣流聲推算每分鐘呼吸次數。">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1D6E8C">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="貓呼吸">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
@@ -657,6 +664,8 @@ async function recStart() {
   setStatus('錄音中…保持安靜，錄 1–2 分鐘後按停止。');
 }
 $('rec').addEventListener('click', () => { if (R.mr) R.mr.stop(); else recStart(); });
+
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 
 setOuts();
 fetch('sample.mp4').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
