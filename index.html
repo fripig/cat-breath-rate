@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>呼吸頻率分析器</title>
+<meta name="description" content="上傳貓咪休息或睡覺時的錄音，自動排除喵叫聲，從鼻息的氣流聲推算每分鐘呼吸次數。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style>
+<style>
+/* Layout: lab-instrument readout — summary strip on top, stacked time-aligned traces with a control rail beside them, manual tap counter below */
+:root{
+  --bg:#EDF1F3; --surface:#FFFFFF; --line:#D3DCE1; --fg:#14212B; --muted:#5B6B76;
+  --accent:#1D6E8C; --accent-soft:#D6E8EF; --event:#D2602F; --event-soft:rgba(210,96,47,.16);
+  --ok:#2E7D4F; --warn:#B07A12; --bad:#B8402C; --band:rgba(46,125,79,.09); --mask:rgba(91,107,118,.18);
+  --sans:"IBM Plex Sans","Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E161B; --surface:#152129; --line:#26363F; --fg:#DCE6EA; --muted:#8FA2AD;
+  --accent:#5DB6D4; --accent-soft:#1B3642; --event:#F08A5D; --event-soft:rgba(240,138,93,.2);
+  --ok:#6CC48F; --warn:#E2B04A; --bad:#F07A62; --band:rgba(108,196,143,.1); --mask:rgba(143,162,173,.16); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0E161B; --surface:#152129; --line:#26363F; --fg:#DCE6EA; --muted:#8FA2AD;
+  --accent:#5DB6D4; --accent-soft:#1B3642; --event:#F08A5D; --event-soft:rgba(240,138,93,.2);
+  --ok:#6CC48F; --warn:#E2B04A; --bad:#F07A62; --band:rgba(108,196,143,.1); --mask:rgba(143,162,173,.16); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.6}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 56px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;gap:20px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px}
+header>div:first-child{min-width:0;max-width:680px}
+h1{font-size:26px;font-weight:700;margin:0;letter-spacing:.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:2px 0 0;font-size:14px}
+.file{display:flex;gap:10px;align-items:center;flex-wrap:wrap;min-width:0}
+.fname{font-family:var(--mono);font-size:13px;color:var(--muted);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button,.btn{font:inherit;font-size:14px;font-weight:500;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:8px 14px;cursor:pointer;display:inline-flex;gap:8px;align-items:center;justify-content:center}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--surface)}
+button:hover,.btn:hover{border-color:var(--accent)}
+button:focus-visible,.btn:focus-within,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#fileInput{position:absolute;width:1px;height:1px;opacity:0}
+#rec.on{background:var(--bad);border-color:var(--bad);color:var(--surface);font-variant-numeric:tabular-nums}
+.drop{border:1.5px dashed var(--line);border-radius:12px;padding:14px;text-align:center;color:var(--muted);font-size:14px}
+.drop.over{border-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+
+.summary{display:grid;grid-template-columns:minmax(230px,1.4fr) repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.cell{padding:16px 18px;border-left:1px solid var(--line);min-width:0}
+.cell:first-child{border-left:0}
+.lab{font-size:12px;color:var(--muted);letter-spacing:.06em}
+.big{font-family:var(--mono);font-size:56px;font-weight:600;line-height:1;margin-top:8px;font-variant-numeric:tabular-nums;color:var(--accent)}
+.big small{font-size:16px;font-weight:500;color:var(--muted);margin-left:6px}
+.val{font-family:var(--mono);font-size:22px;font-weight:500;margin-top:6px;font-variant-numeric:tabular-nums}
+.note{font-size:12.5px;color:var(--muted);margin-top:4px}
+.pills{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid currentColor}
+.pill.ok{color:var(--ok)}.pill.warn{color:var(--warn)}.pill.bad{color:var(--bad)}
+
+.main{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:20px;align-items:start}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+.traces{display:grid;gap:4px;position:relative}
+.trace{position:relative}
+.trace h3{position:absolute;top:6px;left:8px;margin:0;font-size:11.5px;font-weight:500;letter-spacing:.05em;color:var(--muted);background:var(--surface);padding:0 6px;border-radius:4px;z-index:2;pointer-events:none}
+.trace.spec h3{background:rgba(0,0,0,.45);color:#E8EEF1}
+canvas{display:block;width:100%;border-radius:6px}
+#cSpec{height:150px}#cEnv{height:150px}#cRate{height:150px}#cAxis{height:22px}
+#cursor{position:absolute;top:0;bottom:22px;width:2px;background:var(--fg);opacity:.75;pointer-events:none;left:0;display:none;z-index:3}
+.plot{cursor:crosshair}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--muted);margin-top:10px}
+.sw{display:inline-block;width:12px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.time{font-family:var(--mono);font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.ctrl{display:grid;gap:18px}
+.ctrl h2,.tap h2{font-size:14px;margin:0;font-weight:600}
+.field{display:grid;gap:6px}
+.field label{font-size:13.5px;display:flex;justify-content:space-between;gap:8px}
+.field output{font-family:var(--mono);font-size:13px;color:var(--accent)}
+.field .hint{font-size:12px;color:var(--muted);line-height:1.5}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:13.5px}
+.check input{margin-top:5px;accent-color:var(--accent)}
+.hintbox{font-size:13px;border-radius:8px;padding:10px 12px;background:var(--accent-soft);line-height:1.55}
+.hintbox[data-tone=warn]{background:transparent;border:1px solid var(--warn)}
+
+.tap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:20px;align-items:center}
+.tap p{margin:6px 0 0;font-size:13.5px;color:var(--muted)}
+.tapbox{display:grid;grid-template-columns:auto minmax(0,1fr);gap:16px;align-items:center}
+#tapBtn{width:150px;height:150px;border-radius:50%;font-size:16px;font-weight:600;background:var(--accent-soft);border:2px solid var(--accent);color:var(--fg);flex-direction:column;gap:2px;user-select:none;-webkit-user-select:none;touch-action:manipulation}
+#tapBtn:active{transform:scale(.97)}
+#tapBtn small{font-size:12px;font-weight:400;color:var(--muted)}
+.tapread{display:grid;gap:6px;min-width:0}
+.tapread .val{font-size:34px;color:var(--accent);margin:0}
+
+.info{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}
+.info h2{font-size:15px;margin:0 0 6px}
+.info li{font-size:13.5px;color:var(--muted)}
+.info ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.status{font-size:13.5px;color:var(--muted)}
+.err{color:var(--bad)}
+.sources{font-size:12.5px;color:var(--muted)}
+.sources a{color:var(--accent)}
+@media (max-width:900px){
+  .main,.tap{grid-template-columns:minmax(0,1fr)}
+  .summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .cell:first-child{grid-column:1/-1;border-top:0}
+  .cell{border-left:0;border-top:1px solid var(--line)}
+  .cell:nth-child(odd):not(:first-child){border-left:1px solid var(--line)}
+  .info{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:420px){.tapbox{grid-template-columns:minmax(0,1fr);justify-items:center;text-align:center}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}#tapBtn:active{transform:none}}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>呼吸頻率分析器</h1>
+      <p class="sub">上傳貓咪休息或睡覺時的錄音，自動排除喵叫聲，從鼻息的氣流聲推算每分鐘呼吸次數。檔案只在你的瀏覽器裡處理，不會上傳。</p>
+    </div>
+    <div class="file">
+      <span class="fname" id="fname">—</span>
+      <button id="rec" type="button">● 錄音</button>
+      <label class="btn primary" for="fileInput">選擇錄音檔<input id="fileInput" type="file" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.webm,.flac"></label>
+    </div>
+  </header>
+
+  <div class="drop" id="drop">也可以把錄音檔拖曳到這裡 · 支援 m4a / mp3 / wav 等格式，建議 1–15 分鐘 · <span id="status" class="status">載入範例中…</span></div>
+
+  <section class="summary" aria-label="分析結果">
+    <div class="cell">
+      <div class="lab">呼吸頻率（中位數）</div>
+      <div class="big"><span id="bpm">—</span><small>次/分</small></div>
+      <div class="pills" id="pills"></div>
+    </div>
+    <div class="cell"><div class="lab">節奏法（自相關）</div><div class="val" id="bpmAc">—</div><div class="note" id="acConf">&nbsp;</div></div>
+    <div class="cell"><div class="lab">有效呼吸間隔</div><div class="val" id="count">—</div><div class="note" id="countNote">&nbsp;</div></div>
+    <div class="cell"><div class="lab">可分析的時間</div><div class="val" id="usable">—</div><div class="note" id="usableNote">&nbsp;</div></div>
+    <div class="cell"><div class="lab">規律度（間隔變異）</div><div class="val" id="cv">—</div><div class="note" id="range">&nbsp;</div></div>
+  </section>
+
+  <div class="main">
+    <section class="panel">
+      <div class="toolbar">
+        <button id="play" type="button" disabled>▶ 播放</button>
+        <span class="time" id="time">0:00 / 0:00</span>
+      </div>
+      <div class="traces plot" id="traces">
+        <div class="trace spec"><h3>頻譜圖 0–4 kHz</h3><canvas id="cSpec"></canvas></div>
+        <div class="trace"><h3 id="envTitle">氣流聲能量（dB，去除背景）</h3><canvas id="cEnv"></canvas></div>
+        <div class="trace"><h3>每分鐘呼吸次數（20 秒滑動視窗）</h3><canvas id="cRate"></canvas></div>
+        <canvas id="cAxis"></canvas>
+        <div id="cursor"></div>
+      </div>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--mask);border:1px solid var(--muted)"></i>貓叫（已排除）</span>
+        <span><i class="sw" style="background:var(--event-soft);border:1px solid var(--event)"></i>偵測到的呼吸聲</span>
+        <span><i class="sw" style="background:var(--event);height:2px"></i>偵測門檻</span>
+        <span><i class="sw" style="background:var(--band);border:1px solid var(--ok)"></i>睡眠時常見 15–30 次/分</span>
+        <span><i class="sw" style="background:var(--bad);height:2px"></i>40 次/分</span>
+        <span>點擊圖表可跳到該時間播放</span>
+      </div>
+    </section>
+
+    <aside class="panel ctrl" aria-label="分析設定">
+      <h2>分析設定</h2>
+      <label class="check"><input id="excl" type="checkbox" checked><span>自動排除貓叫（有明顯音高的大聲段落）</span></label>
+      <div class="field">
+        <label for="sens">偵測靈敏度 <output id="sensOut"></output></label>
+        <input id="sens" type="range" min="0.15" max="0.8" step="0.01" value="0.4">
+        <div class="hint">漏抓呼吸就往左調，雜音被當成呼吸就往右調。</div>
+      </div>
+      <div class="field">
+        <label for="lo">頻帶下限 <output id="loOut"></output></label>
+        <input id="lo" type="range" min="100" max="2500" step="50" value="1000">
+      </div>
+      <div class="field">
+        <label for="hi">頻帶上限 <output id="hiOut"></output></label>
+        <input id="hi" type="range" min="1000" max="4000" step="100" value="3000">
+        <div class="hint">貓的鼻息多在 1000–3000 Hz。如果牠在打呼，試試 200–1500 Hz。</div>
+      </div>
+      <div class="field">
+        <label for="minInt">兩次呼吸最短間隔 <output id="minIntOut"></output></label>
+        <input id="minInt" type="range" min="0.4" max="3" step="0.1" value="0.8">
+        <div class="hint">比這更近的聲音會合併成同一次呼吸。</div>
+      </div>
+      <label class="check"><input id="paired" type="checkbox"><span>吸氣和吐氣各有一聲（每兩聲算一次呼吸）</span></label>
+      <div class="hintbox" id="hint" hidden></div>
+      <button id="reset" type="button">恢復預設值</button>
+    </aside>
+  </div>
+
+  <section class="panel tap" aria-label="手動計數">
+    <div>
+      <h2>手動計數（錄音聽不清楚時最準）</h2>
+      <p>看著貓的胸口或肚子，每起伏一次（吸一口氣再吐出）就點一下按鈕，也可以按空白鍵。點滿 30 秒左右，數字就很可靠了。</p>
+    </div>
+    <div class="tapbox">
+      <button id="tapBtn" type="button">點一下<small>每次呼吸</small></button>
+      <div class="tapread">
+        <div class="lab">手動計數結果</div>
+        <div class="val" id="tapBpm">— <small style="font-size:14px;color:var(--muted)">次/分</small></div>
+        <div class="note" id="tapNote">還沒開始</div>
+        <div><button id="tapReset" type="button">重新計數</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="info panel">
+    <div>
+      <h2>怎麼算的</h2>
+      <ul>
+        <li>每 10 毫秒做一次頻譜分析。</li>
+        <li>又大聲、又有明顯音高的段落（頻譜圖上一條條的弧線）判定為貓叫，連同前後 0.3 秒一起排除。</li>
+        <li>在設定的頻帶裡找一陣一陣的氣流聲，扣掉背景後超過門檻就算一次呼吸。</li>
+        <li>跨過貓叫的間隔不採用。主數字用有效間隔的中位數換算，節奏法用來核對。</li>
+      </ul>
+    </div>
+    <div>
+      <h2>參考範圍</h2>
+      <ul>
+        <li>一次呼吸＝胸口起伏一次（吸＋吐）。</li>
+        <li>貓在睡覺或安靜休息時，通常每分鐘少於 30 次。</li>
+        <li>睡眠中持續超過 40 次、張口呼吸或呼吸很用力，請聯絡獸醫。</li>
+        <li>醒著、剛玩完、天熱、緊張或正在叫時本來就會比較快，這時量的數字不能拿來判斷。</li>
+      </ul>
+    </div>
+    <div>
+      <h2>錄音建議</h2>
+      <ul>
+        <li>等貓熟睡再錄，手機離口鼻 10–30 公分。</li>
+        <li>關掉電扇和冷氣，錄 1–2 分鐘。</li>
+        <li>貓在呼嚕時，呼吸聲會被蓋住。</li>
+        <li>錄音裡聽不到呼吸聲的話，用上方的手動計數。</li>
+      </ul>
+    </div>
+  </section>
+  <p class="sources">參考：<a href="https://catvets.com/wp-content/uploads/2026/04/HHC-SRR-Monitoring-Form.pdf" target="_blank" rel="noopener">AAFP 睡眠呼吸頻率監測表</a> · <a href="https://cliniciansbrief.com/article/home-respiratory-rate-monitoring-dogs-cats" target="_blank" rel="noopener">Clinician's Brief：居家呼吸頻率監測</a>。這不是醫療檢測，有疑慮請直接諮詢獸醫。</p>
+</div>
+
+<script id="core">
+/* ---------- signal core (no DOM) ---------- */
+const Core = (() => {
+  function coefs(f, sr, Q = Math.SQRT1_2) {
+    const w = 2 * Math.PI * f / sr, c = Math.cos(w), s = Math.sin(w), a = s / (2 * Q), a0 = 1 + a;
+    return [(1 - c) / 2 / a0, (1 - c) / a0, (1 - c) / 2 / a0, -2 * c / a0, (1 - a) / a0];
+  }
+  function filt(x, co) {
+    const [b0, b1, b2, a1, a2] = co; let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < x.length; i++) { const xi = x[i], yi = b0 * xi + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = xi; y2 = y1; y1 = yi; x[i] = yi; }
+  }
+  function fft(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) { let b = n >> 1; for (; j & b; b >>= 1) j ^= b; j ^= b; if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+    for (let len = 2; len <= n; len <<= 1) {
+      const a = -2 * Math.PI / len, wr = Math.cos(a), wi = Math.sin(a), h = len >> 1;
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let j = 0; j < h; j++) {
+          const k = i + j + h, vr = re[k] * cr - im[k] * ci, vi = re[k] * ci + im[k] * cr;
+          re[k] = re[i + j] - vr; im[k] = im[i + j] - vi; re[i + j] += vr; im[i + j] += vi;
+          const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+  }
+  const QS = 1.6, QO = 150; // dB = q/QS - QO
+  const PW = new Float64Array(256); for (let q = 0; q < 256; q++) PW[q] = Math.pow(10, (q / QS - QO) / 10);
+
+  // short-time spectrum at ~100 frames/s, ~8 kHz sample rate, stored as quantized dB
+  function stft(samples, sr) {
+    const k = Math.max(1, Math.floor(sr / 8000)), sr2 = sr / k;
+    let x;
+    if (k > 1) {
+      const x0 = Float32Array.from(samples), co = coefs(sr2 * 0.45, sr); filt(x0, co); filt(x0, co);
+      x = new Float32Array(Math.floor(x0.length / k)); for (let i = 0; i < x.length; i++) x[i] = x0[i * k];
+    } else x = samples;
+    const N = 256, bins = N / 2, hop = Math.round(sr2 / 100), n = Math.max(0, Math.floor((x.length - N) / hop) + 1);
+    const win = new Float32Array(N); let ws = 0;
+    for (let i = 0; i < N; i++) { win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1)); ws += win[i]; }
+    const norm = 4 / (ws * ws), q = new Uint8Array(n * bins), re = new Float64Array(N), im = new Float64Array(N);
+    for (let f = 0; f < n; f++) {
+      const o = f * hop;
+      for (let i = 0; i < N; i++) { re[i] = x[o + i] * win[i]; im[i] = 0; }
+      fft(re, im);
+      for (let b = 0; b < bins; b++) {
+        const db = 10 * Math.log10((re[b] * re[b] + im[b] * im[b]) * norm + 1e-20);
+        q[f * bins + b] = Math.max(0, Math.min(255, Math.round((db + QO) * QS)));
+      }
+    }
+    return { q, n, bins, fps: sr2 / hop, hz: sr2 / N, maxF: sr2 / 2 };
+  }
+  function band(S, lo, hi) {
+    const b0 = Math.max(1, Math.ceil(lo / S.hz)), b1 = Math.min(S.bins - 1, Math.floor(hi / S.hz)), out = new Float32Array(S.n);
+    for (let f = 0; f < S.n; f++) { let s = 0; const o = f * S.bins; for (let b = b0; b <= b1; b++) s += PW[S.q[o + b]]; out[f] = 10 * Math.log10(s + 1e-20); }
+    return out;
+  }
+  // how "pitched" each frame is: strongest bin vs. median bin, 150–2500 Hz, in dB
+  function tonality(S) {
+    const b0 = Math.ceil(150 / S.hz), b1 = Math.min(S.bins - 1, Math.floor(2500 / S.hz)), m = b1 - b0 + 1, out = new Float32Array(S.n), tmp = new Uint8Array(m);
+    for (let f = 0; f < S.n; f++) {
+      const o = f * S.bins; let mx = 0;
+      for (let b = 0; b < m; b++) { const v = S.q[o + b0 + b]; tmp[b] = v; if (v > mx) mx = v; }
+      tmp.sort(); out[f] = (mx - tmp[m >> 1]) / QS;
+    }
+    return out;
+  }
+  function movAvg(a, w) {
+    const n = a.length, p = new Float64Array(n + 1), out = new Float32Array(n), h = Math.floor(w / 2);
+    for (let i = 0; i < n; i++) p[i + 1] = p[i] + a[i];
+    for (let i = 0; i < n; i++) { const l = Math.max(0, i - h), r = Math.min(n, i + h + 1); out[i] = (p[r] - p[l]) / (r - l); }
+    return out;
+  }
+  function pct(arr, p) {
+    const s = Float32Array.from(arr).filter(v => v === v).sort(); if (!s.length) return NaN;
+    return s[Math.min(s.length - 1, Math.max(0, Math.round(p * (s.length - 1))))];
+  }
+  function median(a) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  function dilate(m, r) {
+    const n = m.length, p = new Int32Array(n + 1), out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) p[i + 1] = p[i] + m[i];
+    for (let i = 0; i < n; i++) out[i] = p[Math.min(n, i + r + 1)] - p[Math.max(0, i - r)] > 0 ? 1 : 0;
+    return out;
+  }
+  const inv = m => m.map(v => 1 - v);
+  function meowMask(S) {
+    const fps = S.fps, ton = movAvg(tonality(S), Math.round(0.15 * fps)), low = band(S, 100, 1000), floor = pct(low, 0.2);
+    let m = new Uint8Array(S.n); for (let i = 0; i < S.n; i++) m[i] = ton[i] > 22 && low[i] - floor > 12 ? 1 : 0;
+    const c = Math.round(0.15 * fps);
+    m = inv(dilate(inv(dilate(m, c)), c));      // close small gaps inside a meow
+    return dilate(m, Math.round(0.3 * fps));    // plus 0.3 s on each side
+  }
+  function rollingPct(a, win, p, step) {
+    const n = a.length, cs = [], vs = [], out = new Float32Array(n); let last = NaN;
+    for (let c = 0; c < n; c += step) { let v = pct(a.subarray(Math.max(0, c - win / 2), Math.min(n, c + win / 2)), p); if (v !== v) v = last; cs.push(c); vs.push(v); last = v; }
+    const first = vs.find(v => v === v); for (let i = 0; i < vs.length && vs[i] !== vs[i]; i++) vs[i] = first;
+    for (let i = 0; i < n; i++) {
+      const k = Math.min(cs.length - 1, Math.floor(i / step)), k2 = Math.min(cs.length - 1, k + 1), t = k2 === k ? 0 : (i - cs[k]) / (cs[k2] - cs[k]);
+      out[i] = vs[k] * (1 - t) + vs[k2] * t;
+    }
+    return out;
+  }
+  function autocorr(d, fps) {
+    const f = 10, k = Math.max(1, Math.round(fps / f)), n = Math.floor(d.length / k), x = new Float64Array(n), ok = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { let s = 0, c = 0; for (let j = 0; j < k; j++) { const v = d[i * k + j]; if (v === v) { s += Math.max(0, v); c++; } } if (c >= k / 2) { x[i] = s / c; ok[i] = 1; } }
+    let m = 0, c = 0; for (let i = 0; i < n; i++) if (ok[i]) { m += x[i]; c++; } m /= c || 1;
+    let v0 = 0; for (let i = 0; i < n; i++) if (ok[i]) { x[i] -= m; v0 += x[i] * x[i]; } v0 /= c || 1;
+    const minL = 4, maxL = Math.min(60, Math.floor(n / 2)), ac = [];
+    for (let L = 0; L <= maxL + 1; L++) { let s = 0, cc = 0; for (let i = 0; i + L < n; i++) if (ok[i] && ok[i + L]) { s += x[i] * x[i + L]; cc++; } ac.push(cc > 20 && v0 ? s / cc / v0 : 0); }
+    const peaks = []; for (let L = minL; L <= maxL; L++) if (ac[L] > ac[L - 1] && ac[L] >= ac[L + 1]) peaks.push(L);
+    if (!peaks.length) return { bpm: NaN, conf: 0 };
+    const g = Math.max(...peaks.map(L => ac[L])), L = peaks.find(L => ac[L] >= 0.75 * g);
+    const y0 = ac[L - 1], y1 = ac[L], y2 = ac[L + 1], den = y0 - 2 * y1 + y2;
+    return { bpm: 60 * f / (L + (den ? 0.5 * (y0 - y2) / den : 0)), conf: y1 };
+  }
+
+  function analyze(S, br, meow, o) {
+    const fps = S.fps, n = S.n, mask = o.excl ? meow : new Uint8Array(n);
+    const pm = new Int32Array(n + 1); for (let i = 0; i < n; i++) pm[i + 1] = pm[i] + mask[i];
+    const masked = (a, b) => pm[Math.min(n, Math.ceil(b * fps) + 1)] - pm[Math.max(0, Math.floor(a * fps))] > 0;
+    const sm = movAvg(br, Math.round(0.15 * fps)), m2 = Float32Array.from(sm, (v, i) => mask[i] ? NaN : v);
+    const base = rollingPct(m2, Math.round(15 * fps), 0.2, Math.round(0.5 * fps));
+    const d = Float32Array.from(m2, (v, i) => v - base[i]);
+    const spread = Math.max(pct(d, 0.97), 1e-3), on = o.sens * spread, off = on * 0.6;
+    let ev = [], inside = false, st = 0, pk = 0;
+    for (let i = 0; i < n; i++) {
+      const v = d[i];
+      if (v !== v) { inside = false; continue; }
+      if (!inside && v > on) { inside = true; st = i; pk = v; }
+      else if (inside) { if (v > pk) pk = v; if (v < off) { inside = false; ev.push({ s: st / fps, e: i / fps, a: pk }); } }
+    }
+    ev = ev.filter(x => x.e - x.s >= 0.12);
+    const merged = [];
+    for (const x of ev) {
+      const last = merged[merged.length - 1];
+      if (last && (x.s - last.s < o.minInt || x.s - last.e < 0.2) && !masked(last.e, x.s)) { last.e = Math.max(last.e, x.e); last.a = Math.max(last.a, x.a); }
+      else merged.push({ ...x });
+    }
+    const cycles = o.paired ? merged.filter((_, i) => i % 2 === 0) : merged;
+    const t = cycles.map(x => x.s), iv = [];
+    for (let i = 1; i < t.length; i++) if (!masked(t[i - 1], t[i])) iv.push({ a: t[i - 1], b: t[i], v: t[i] - t[i - 1] });
+    const med = median(iv.map(x => x.v));
+    const isPause = v => v > Math.max(10, 2.5 * med);
+    const reg = iv.filter(x => !isPause(x.v) && x.v < 2.2 * med).map(x => x.v);
+    const mean = reg.reduce((a, b) => a + b, 0) / (reg.length || 1);
+    const sd = Math.sqrt(reg.reduce((a, b) => a + (b - mean) ** 2, 0) / (reg.length || 1));
+    const dur = n / fps, rolling = [], W = Math.min(20, dur);
+    for (let c = W / 2; c <= dur - W / 2 + 1e-6; c += 1) {
+      const w = iv.filter(x => x.a >= c - W / 2 && x.b <= c + W / 2 && !isPause(x.v)).map(x => x.v);
+      rolling.push({ t: c, bpm: w.length >= 2 ? 60 / median(w) : NaN });
+    }
+    const ac = autocorr(d, fps);
+    return {
+      d, mask, on, spread, events: merged, cycles, intervals: iv, median: med,
+      bpm: med ? 60 / med : NaN, acBpm: o.paired ? ac.bpm / 2 : ac.bpm, rawAcBpm: ac.bpm, acConf: ac.conf,
+      cv: reg.length > 2 ? sd / mean : NaN, minBpm: reg.length ? 60 / Math.max(...reg) : NaN, maxBpm: reg.length ? 60 / Math.min(...reg) : NaN,
+      pauses: iv.filter(x => isPause(x.v)), rolling, dur, usable: (n - pm[n]) / fps
+    };
+  }
+  return { stft, band, meowMask, analyze, pct, QS, QO };
+})();
+if (typeof module !== 'undefined') module.exports = Core;
+</script>
+
+<script>
+/* ---------- UI ---------- */
+const $ = id => document.getElementById(id);
+const DEF = { sens: 0.4, lo: 1000, hi: 3000, minInt: 0.8, paired: false, excl: true };
+const S = { st: null, meow: null, br: null, brKey: '', res: null, specImg: null, audio: null, url: null };
+
+function opts() { return { sens: +$('sens').value, lo: +$('lo').value, hi: +$('hi').value, minInt: +$('minInt').value, paired: $('paired').checked, excl: $('excl').checked }; }
+function setOuts() {
+  const o = opts();
+  $('sensOut').textContent = Math.round(o.sens * 100) + '%';
+  $('loOut').textContent = o.lo + ' Hz'; $('hiOut').textContent = o.hi + ' Hz';
+  $('minIntOut').textContent = o.minInt.toFixed(1) + ' 秒';
+  $('envTitle').textContent = `氣流聲能量 ${o.lo}–${Math.max(o.hi, o.lo + 200)} Hz（dB，去除背景）`;
+}
+const fmtT = s => { s = Math.max(0, s); const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ':' + String(r).padStart(2, '0'); };
+const f1 = v => isFinite(v) ? v.toFixed(1) : '—';
+function setStatus(t, err) { $('status').textContent = t; $('status').className = 'status' + (err ? ' err' : ''); }
+
+async function decode(buf) {
+  const C = window.OfflineAudioContext || window.webkitOfflineAudioContext, ctx = new C(1, 1, 44100);
+  return await new Promise((res, rej) => { const p = ctx.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); });
+}
+async function loadBuffer(buf, name) {
+  setStatus('解碼中…'); $('fname').textContent = name;
+  let ab;
+  try { ab = await decode(buf.slice(0)); }
+  catch (e) { setStatus('這個檔案無法在瀏覽器解碼，請改用 m4a、mp3 或 wav 再試一次。', true); return; }
+  const n = ab.length, ch = ab.numberOfChannels, mono = new Float32Array(n);
+  for (let c = 0; c < ch; c++) { const d = ab.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / ch; }
+  if (S.url) URL.revokeObjectURL(S.url);
+  S.url = URL.createObjectURL(new Blob([buf]));
+  if (S.audio) S.audio.pause();
+  S.audio = new Audio(S.url);
+  S.audio.addEventListener('ended', () => { $('play').textContent = '▶ 播放'; });
+  $('play').disabled = false; $('play').textContent = '▶ 播放';
+  setStatus('分析中…');
+  await new Promise(r => setTimeout(r, 20));
+  S.st = Core.stft(mono, ab.sampleRate); S.meow = Core.meowMask(S.st); S.brKey = ''; S.specImg = null;
+  run();
+  const dur = n / ab.sampleRate;
+  setStatus(dur < 20 ? '錄音不到 20 秒，結果可能不準。' : `已分析 ${fmtT(dur)} 的錄音。`, dur < 20);
+}
+
+function run() {
+  if (!S.st) return;
+  const o = opts(), hi = Math.max(o.hi, o.lo + 200), key = o.lo + '-' + hi;
+  if (S.brKey !== key) { S.br = Core.band(S.st, o.lo, hi); S.brKey = key; }
+  S.res = Core.analyze(S.st, S.br, S.meow, o);
+  render();
+}
+
+function render() {
+  const r = S.res, o = opts(), nIv = r.intervals.length;
+  $('bpm').textContent = f1(r.bpm);
+  const pills = [];
+  if (isFinite(r.bpm)) {
+    if (r.bpm < 30) pills.push('<span class="pill ok">在睡眠時的正常範圍內</span>');
+    else if (r.bpm <= 40) pills.push('<span class="pill warn">偏快（若貓在熟睡）</span>');
+    else pills.push('<span class="pill bad">偏快：熟睡時也這樣請聯絡獸醫</span>');
+    const agree = isFinite(r.acBpm) ? Math.abs(r.bpm - r.acBpm) / r.bpm : 1;
+    if (nIv < 8) pills.push('<span class="pill warn">可用資料少，僅供參考</span>');
+    else pills.push(agree < 0.15 ? '<span class="pill ok">兩種算法一致</span>' : '<span class="pill warn">兩種算法差異大</span>');
+  }
+  $('pills').innerHTML = pills.join('');
+  $('bpmAc').textContent = isFinite(r.acBpm) ? f1(r.acBpm) + ' 次/分' : '—';
+  $('acConf').textContent = isFinite(r.acBpm) ? `週期強度 ${Math.round(r.acConf * 100)}%` : '找不到穩定週期';
+  $('count').textContent = nIv + ' 個';
+  $('countNote').textContent = `共偵測到 ${r.cycles.length} 次呼吸` + (o.paired ? `（${r.events.length} 聲）` : '');
+  $('usable').textContent = fmtT(r.usable) + ' / ' + fmtT(r.dur);
+  $('usableNote').textContent = o.excl ? `其餘 ${Math.round((1 - r.usable / r.dur) * 100)}% 是貓叫，已排除` : '未排除貓叫';
+  $('cv').textContent = isFinite(r.cv) ? Math.round(r.cv * 100) + '%' : '—';
+  $('range').textContent = isFinite(r.minBpm) ? `${f1(r.minBpm)}–${f1(r.maxBpm)} 次/分` : ' ';
+  const h = $('hint'); let msg = '', tone = '';
+  if (!(r.spread >= 3)) { msg = '呼吸聲和背景音量差不多，結果可能不可靠。試著調整頻帶，或把手機放近一點重錄。'; tone = 'warn'; }
+  else if (r.usable / r.dur < 0.8 && o.excl) { msg = `錄音裡有 ${Math.round((1 - r.usable / r.dur) * 100)}% 是貓叫。會叫代表貓醒著，這時的呼吸本來就比睡覺時快，數字不能拿來和睡眠時的標準比。建議等牠睡著再錄，或用下方的手動計數。`; tone = 'warn'; }
+  else if (nIv < 6) { msg = '有效的呼吸間隔太少。試著把靈敏度往左調，或調整頻帶。'; tone = 'warn'; }
+  else if (!o.paired && isFinite(r.rawAcBpm) && r.acConf > 0.15 && Math.abs(r.rawAcBpm / r.bpm - 0.5) < 0.12)
+    msg = '節奏法的週期剛好是偵測間隔的兩倍，可能吸氣和吐氣各發出一聲。可以勾選「吸氣和吐氣各有一聲」。';
+  h.hidden = !msg; h.textContent = msg; if (tone) h.dataset.tone = tone; else delete h.dataset.tone;
+  draw();
+}
+
+/* ---------- drawing ---------- */
+const tok = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function prep(c) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h); return [g, w, h];
+}
+const RAMP = [[8, 14, 26], [22, 58, 96], [24, 128, 150], [120, 196, 150], [244, 236, 170]];
+function specImage() {
+  const st = S.st, cols = Math.min(st.n, 1600), bins = st.bins;
+  const sample = []; for (let c = 0; c < cols; c += 7) for (let b = 0; b < bins; b += 3) sample.push(st.q[Math.floor(c * st.n / cols) * bins + b]);
+  const lo = Core.pct(sample, 0.1), hi = Core.pct(sample, 0.997);
+  const cv = document.createElement('canvas'); cv.width = cols; cv.height = bins;
+  const g = cv.getContext('2d'), im = g.createImageData(cols, bins);
+  for (let c = 0; c < cols; c++) {
+    const f = Math.floor(c * st.n / cols);
+    for (let b = 0; b < bins; b++) {
+      let t = (st.q[f * bins + b] - lo) / (hi - lo); t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1);
+      const i = Math.min(RAMP.length - 2, Math.floor(t)), fr = t - i, p = ((bins - 1 - b) * cols + c) * 4;
+      for (let k = 0; k < 3; k++) im.data[p + k] = RAMP[i][k] + (RAMP[i + 1][k] - RAMP[i][k]) * fr;
+      im.data[p + 3] = 255;
+    }
+  }
+  g.putImageData(im, 0, 0); return cv;
+}
+function spans(mask, fps) { const out = []; let s = -1; for (let i = 0; i <= mask.length; i++) { const v = i < mask.length && mask[i]; if (v && s < 0) s = i; if (!v && s >= 0) { out.push([s / fps, i / fps]); s = -1; } } return out; }
+function draw() {
+  if (!S.res) return;
+  const r = S.res, dur = r.dur, X = (t, w) => t / dur * w, fps = S.st.fps;
+  const fg = tok('--fg'), muted = tok('--muted'), line = tok('--line'), acc = tok('--accent'), ev = tok('--event'), evs = tok('--event-soft'), band = tok('--band'), mk = tok('--mask'), bad = tok('--bad'), mono = tok('--mono');
+  const ms = spans(r.mask, fps);
+  // spectrogram
+  let [g, w, h] = prep($('cSpec'));
+  if (!S.specImg) S.specImg = specImage();
+  g.imageSmoothingEnabled = true; g.drawImage(S.specImg, 0, 0, w, h);
+  g.fillStyle = 'rgba(220,230,234,.85)'; for (const [a, b] of ms) g.fillRect(X(a, w), h - 5, X(b - a, w), 5);
+  g.fillStyle = '#E8EEF1'; g.font = '11px ' + mono; g.textAlign = 'right';
+  g.fillText(Math.round(S.st.maxF / 1000) + ' kHz', w - 6, 14);
+  const o = opts(), yb = f => h - f / S.st.maxF * h;
+  g.strokeStyle = 'rgba(240,138,93,.8)'; g.setLineDash([3, 3]); g.lineWidth = 1;
+  for (const f of [o.lo, Math.max(o.hi, o.lo + 200)]) { g.beginPath(); g.moveTo(0, yb(f)); g.lineTo(w, yb(f)); g.stroke(); }
+  g.setLineDash([]);
+  // envelope
+  [g, w, h] = prep($('cEnv'));
+  g.fillStyle = tok('--surface'); g.fillRect(0, 0, w, h);
+  g.fillStyle = mk; for (const [a, b] of ms) g.fillRect(X(a, w), 0, Math.max(1, X(b - a, w)), h);
+  const d = r.d, lo = Math.min(-2, Core.pct(d, 0.01)), hi = Math.max(r.on * 1.3, Core.pct(d, 0.999)) * 1.05;
+  const Y = v => h - 6 - (v - lo) / (hi - lo) * (h - 30);
+  g.fillStyle = evs; for (const e of r.events) g.fillRect(X(e.s, w), 22, Math.max(1.5, X(e.e - e.s, w)), h - 26);
+  if (o.paired) { g.fillStyle = ev; for (const e of r.cycles) { g.beginPath(); g.arc(X(e.s, w), 26, 2.5, 0, 7); g.fill(); } }
+  g.strokeStyle = acc; g.lineWidth = 1.2; g.beginPath();
+  const step = Math.max(1, Math.floor(d.length / (w * 2))); let pen = false;
+  for (let i = 0; i < d.length; i += step) {
+    let m = -1e9; for (let j = i; j < Math.min(d.length, i + step); j++) if (d[j] === d[j]) m = Math.max(m, d[j]);
+    if (m === -1e9) { pen = false; continue; }
+    const x = i / fps / dur * w; pen ? g.lineTo(x, Y(m)) : g.moveTo(x, Y(m)); pen = true;
+  }
+  g.stroke();
+  g.strokeStyle = ev; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(0, Y(r.on)); g.lineTo(w, Y(r.on)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = ev; g.font = '11px ' + mono; g.textAlign = 'right'; g.fillText('門檻 ' + r.on.toFixed(1) + ' dB', w - 6, Y(r.on) - 4);
+  // rate
+  [g, w, h] = prep($('cRate'));
+  g.fillStyle = tok('--surface'); g.fillRect(0, 0, w, h);
+  const vals = r.rolling.map(p => p.bpm).filter(isFinite);
+  const vmax = Math.max(60, Math.ceil((Math.max(0, ...vals) + 5) / 20) * 20), RY = v => h - 8 - v / vmax * (h - 34);
+  g.fillStyle = band; g.fillRect(0, RY(30), w, RY(15) - RY(30));
+  g.strokeStyle = line; g.lineWidth = 1; g.fillStyle = muted; g.font = '11px ' + mono; g.textAlign = 'right';
+  for (let v = 20; v <= vmax; v += 20) { g.beginPath(); g.moveTo(0, RY(v)); g.lineTo(w, RY(v)); g.stroke(); g.fillText(v, w - 4, RY(v) - 3); }
+  g.strokeStyle = bad; g.setLineDash([6, 4]); g.beginPath(); g.moveTo(0, RY(40)); g.lineTo(w, RY(40)); g.stroke(); g.setLineDash([]);
+  g.strokeStyle = acc; g.lineWidth = 2; g.beginPath(); pen = false; const solo = [];
+  r.rolling.forEach((p, i) => {
+    if (!isFinite(p.bpm)) { pen = false; return; }
+    const x = X(p.t, w), y = RY(p.bpm); pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true;
+    const pv = r.rolling[i - 1], nx = r.rolling[i + 1];
+    if (!(pv && isFinite(pv.bpm)) && !(nx && isFinite(nx.bpm))) solo.push([x, y]);
+  });
+  g.stroke(); g.fillStyle = acc; for (const [x, y] of solo) { g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); }
+  if (isFinite(r.bpm)) { g.strokeStyle = fg; g.globalAlpha = .5; g.setLineDash([2, 3]); g.lineWidth = 1; g.beginPath(); g.moveTo(0, RY(r.bpm)); g.lineTo(w, RY(r.bpm)); g.stroke(); g.setLineDash([]); g.globalAlpha = 1; }
+  // axis
+  [g, w, h] = prep($('cAxis'));
+  const steps = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  const st = steps.find(s => dur / s <= Math.max(3, w / 90)) || 3600;
+  g.fillStyle = muted; g.strokeStyle = line; g.font = '11px ' + mono;
+  for (let t = 0; t <= dur; t += st) {
+    const x = X(t, w); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, 5); g.stroke();
+    g.textAlign = t === 0 ? 'left' : (x > w - 20 ? 'right' : 'center'); g.fillText(fmtT(t), x, 17);
+  }
+  drawCursor();
+}
+function drawCursor() {
+  const c = $('cursor'), a = S.audio;
+  if (!a || !S.res) { c.style.display = 'none'; return; }
+  const t = a.currentTime || 0;
+  $('time').textContent = fmtT(t) + ' / ' + fmtT(S.res.dur);
+  c.style.display = t > 0 || !a.paused ? 'block' : 'none';
+  c.style.left = (t / S.res.dur * 100) + '%';
+}
+function tick() { drawCursor(); if (S.audio && !S.audio.paused) requestAnimationFrame(tick); }
+
+/* ---------- manual tap counter ---------- */
+const T = { taps: [], timer: 0 };
+function tapRender() {
+  const n = T.taps.length, el = n ? (performance.now() - T.taps[0]) / 1000 : 0;
+  if (n >= 3) {
+    const bpm = (n - 1) / ((T.taps[n - 1] - T.taps[0]) / 1000) * 60;
+    $('tapBpm').firstChild.textContent = bpm.toFixed(1) + ' ';
+  } else $('tapBpm').firstChild.textContent = '— ';
+  $('tapNote').textContent = n ? `已點 ${n} 下 · 計時 ${Math.floor(el)} 秒` + (el >= 30 && n >= 3 ? ' · 已滿 30 秒' : '') : '還沒開始';
+}
+$('tapBtn').addEventListener('click', () => {
+  T.taps.push(performance.now()); tapRender();
+  if (!T.timer) T.timer = setInterval(tapRender, 500);
+});
+$('tapReset').addEventListener('click', () => { T.taps = []; clearInterval(T.timer); T.timer = 0; tapRender(); });
+
+/* ---------- events ---------- */
+['sens', 'lo', 'hi', 'minInt'].forEach(id => $(id).addEventListener('input', () => { setOuts(); clearTimeout(S.t); S.t = setTimeout(run, 60); }));
+['paired', 'excl'].forEach(id => $(id).addEventListener('change', run));
+$('reset').addEventListener('click', () => { for (const k in DEF) { if (typeof DEF[k] === 'boolean') $(k).checked = DEF[k]; else $(k).value = DEF[k]; } setOuts(); run(); });
+$('fileInput').addEventListener('change', async e => { const f = e.target.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name); });
+const drop = $('drop');
+['dragenter', 'dragover'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); if (t === 'drop' || e.target === drop) drop.classList.remove('over'); }));
+document.addEventListener('drop', async e => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadBuffer(await f.arrayBuffer(), f.name); });
+$('play').addEventListener('click', () => {
+  const a = S.audio; if (!a) return;
+  if (a.paused) a.play().then(() => { $('play').textContent = '❚❚ 暫停'; tick(); }).catch(() => setStatus('瀏覽器拒絕播放這個檔案。', true));
+  else { a.pause(); $('play').textContent = '▶ 播放'; }
+});
+$('traces').addEventListener('click', e => {
+  if (!S.audio || !S.res) return;
+  const r = $('traces').getBoundingClientRect();
+  S.audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * S.res.dur;
+  drawCursor();
+});
+new ResizeObserver(() => draw()).observe($('traces'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+/* ---------- in-browser recording ---------- */
+const R = { mr: null, stream: null, chunks: [], t0: 0, timer: 0 };
+function recLabel() { $('rec').textContent = R.mr ? `■ 停止 ${fmtT((performance.now() - R.t0) / 1000)}` : '● 錄音'; }
+async function recStart() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) { setStatus('這個瀏覽器不支援錄音，請改用上傳檔案。', true); return; }
+  try {
+    R.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) { setStatus('無法使用麥克風，請在瀏覽器允許麥克風權限。', true); return; }
+  const type = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t));
+  R.mr = new MediaRecorder(R.stream, type ? { mimeType: type } : undefined);
+  R.chunks = [];
+  R.mr.ondataavailable = e => { if (e.data && e.data.size) R.chunks.push(e.data); };
+  R.mr.onstop = async () => {
+    const mime = R.mr.mimeType || type || 'audio/webm';
+    R.stream.getTracks().forEach(t => t.stop());
+    R.mr = null; clearInterval(R.timer); $('rec').classList.remove('on'); recLabel();
+    const blob = new Blob(R.chunks, { type: mime }), ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+    const d = new Date(), stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    loadBuffer(await blob.arrayBuffer(), `錄音-${stamp}.${ext}`);
+  };
+  R.mr.start(1000); R.t0 = performance.now();
+  $('rec').classList.add('on'); recLabel(); R.timer = setInterval(recLabel, 500);
+  setStatus('錄音中…保持安靜，錄 1–2 分鐘後按停止。');
+}
+$('rec').addEventListener('click', () => { if (R.mr) R.mr.stop(); else recStart(); });
+
+setOuts();
+fetch('sample.mp4').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); })
+  .then(b => loadBuffer(b, '範例錄音.m4a'))
+  .catch(() => setStatus('選一個錄音檔開始分析。'));
+</script>
+
+</body>
+</html>
